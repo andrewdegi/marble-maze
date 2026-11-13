@@ -97,18 +97,29 @@ function onOrientation(e) {
   if (tiltOn) send(mul(conj(levelQ), latest));      // turn since levelling, device frame
 }
 
-let asked = false;
-async function enableTilt() {
-  if (asked) return;
-  asked = true;
-  try {
-    if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
-      if ((await DeviceOrientationEvent.requestPermission()) !== "granted") return;   // iOS: drag to play instead
-    }
-  } catch (err) {
+// iOS shows the motion prompt only from a finished tap (touchend / click),
+// not from touch-down, and only once that tap's handler calls it directly.
+let listening = false;
+let pending = false;
+function enableTilt() {
+  if (listening || pending) return;
+  const D = window.DeviceOrientationEvent;
+  if (!D) return;
+  if (typeof D.requestPermission !== "function") {        // Android, desktop
+    listening = true;
+    window.addEventListener("deviceorientation", onOrientation);
     return;
   }
-  window.addEventListener("deviceorientation", onOrientation);
+  pending = true;
+  D.requestPermission()                                   // called inside the tap
+    .then((answer) => {
+      if (answer === "granted") {
+        listening = true;
+        window.addEventListener("deviceorientation", onOrientation);
+      }
+    })
+    .catch(() => {})                                      // not a gesture: try on the next tap
+    .finally(() => { pending = false; });
 }
 
 function restart() {
@@ -121,8 +132,9 @@ function restart() {
 let lastTap = 0, lastX = 0, lastY = 0, downX = 0, downY = 0;
 canvas.addEventListener("pointerdown", (e) => {
   downX = e.clientX; downY = e.clientY;
-  if (e.pointerType !== "mouse") enableTilt();
 });
+canvas.addEventListener("touchend", enableTilt, { passive: true });
+canvas.addEventListener("click", enableTilt);
 canvas.addEventListener("pointerup", (e) => {
   if (Math.hypot(e.clientX - downX, e.clientY - downY) > 12) return;   // that was a drag
   const now = performance.now();
