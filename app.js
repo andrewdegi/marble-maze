@@ -3,16 +3,22 @@
 //
 //   first tap   turns on tilt control (iOS asks for motion access here)
 //   double tap  restarts, and levels the tilt to however the device is held
-//   drag        turns the sphere (or, with tilt on, looks around it)
+//   drag        looks around the toy
 //
-// Tilt works like a joystick: tip the device and the sphere keeps turning
-// that way, faster the further it's tipped; back to level and it stops.
-// Tilt comes from the accelerometer's gravity direction, not the
-// orientation angles, which jump near upright (gimbal lock).
+// Tilt steers gravity. The device's tilt away from level is multiplied by
+// GAIN, so a 10 degree tip swings down by 40 degrees and a 45 degree tip in
+// any direction turns gravity right over: full 360 degree control without
+// turning the device over. Try ?gain=5 or ?gain=3 in the address.
 //
-// The file's "Motion" view model takes the device's turn since it was last
-// levelled, as a quaternion in the screen's frame (x right, y up the
-// screen, z out of the screen), plus counters that re-level and restart.
+// The tilt comes from the gyro-fused orientation (fast and steady), turned
+// into the direction of "up" so the angles' blind spot near upright never
+// matters; the raw accelerometer is the fallback.
+//
+// The file's "Motion" view model takes the (amplified) turn since levelling
+// as a quaternion in the screen's frame (x right, y up the screen, z out of
+// the screen), plus counters that re-level and restart.
+
+const GAIN = Math.max(1, Math.min(8, parseFloat(new URLSearchParams(location.search).get("gain")) || 4));
 
 const canvas = document.getElementById("maze");
 
@@ -29,14 +35,15 @@ function sharpLayout() {
 }
 
 let vm = null;
-let gNow = null;            // smoothed gravity, screen frame
-let gLevel = null;          // gravity when last levelled
+let uNow = null;            // "up" in the screen's frame
+let uLevel = null;          // "up" when last levelled
 let tiltOn = false;
+let fused = false;          // orientation events arriving
 let recenterCount = 0;
 let restartCount = 0;
 
 const r = new rive.Rive({
-  src: "mazeball.riv?v=5",
+  src: "mazeball.riv?v=6",
   canvas,
   autoplay: true,
   stateMachine: "State Machine 1",
@@ -59,7 +66,7 @@ function fit() {
 let resizeTimer = 0;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { fit(); gLevel = gNow; }, 200);
+  resizeTimer = setTimeout(() => { fit(); uLevel = uNow; }, 200);
 });
 
 // --- vectors and quaternions [x, y, z, w] -----------------------------------
@@ -89,52 +96,79 @@ function send(q) {
   vm.number("qw").value = q[3];
 }
 
-function onMotion(e) {
-  const a = e.accelerationIncludingGravity;
-  if (!a || a.x == null || a.y == null || a.z == null) return;
-  const g = toScreen(norm([a.x, a.y, a.z]));
-  if (!isFinite(g[0] + g[1] + g[2])) return;
-  // a very light low-pass: takes the edge off hand shake without lag
-  gNow = gNow ? norm([gNow[0] * 0.55 + g[0] * 0.45, gNow[1] * 0.55 + g[1] * 0.45, gNow[2] * 0.55 + g[2] * 0.45]) : g;
-  if (!gLevel) gLevel = gNow;
+// the same turn, about the same axis, GAIN times as far (at most right over)
+function amplify(q) {
+  const w = Math.max(-1, Math.min(1, q[3]));
+  const ang = 2 * Math.acos(w);
+  const s = Math.sin(ang / 2);
+  if (s < 1e-6) return [0, 0, 0, 1];
+  const a2 = Math.min(ang * GAIN, Math.PI);
+  const k = Math.sin(a2 / 2) / s;
+  return [q[0] * k, q[1] * k, q[2] * k, Math.cos(a2 / 2)];
+}
+
+function update(u) {
+  if (!isFinite(u[0] + u[1] + u[2])) return;
+  uNow = u;
+  if (!uLevel) uLevel = u;
   if (!tiltOn && vm) {
-    // the first real reading switches the sphere over to the device
+    // the first real reading switches the toy over to the device
     tiltOn = true;
     vm.number("recenter").value = ++recenterCount;
     vm.boolean("motionActive").value = true;
   }
-  // the device's turn since levelling: gravity, seen from the screen, has
+  // the device's tilt since levelling: "up", seen from the screen, has
   // swung from where it was to where it is now
-  if (tiltOn) send(fromTo(gNow, gLevel));
+  if (tiltOn) send(amplify(fromTo(u, uLevel)));
+}
+
+// "up" in the device's frame from the W3C angles (Z-X'-Y''): it depends only
+// on beta and gamma, and stays continuous through upright
+function onOrientation(e) {
+  if (e.beta == null || e.gamma == null) return;
+  fused = true;
+  const d = Math.PI / 180, b = e.beta * d, g = e.gamma * d;
+  update(toScreen([-Math.cos(b) * Math.sin(g), Math.sin(b), Math.cos(b) * Math.cos(g)]));
+}
+
+// fallback when there's no fused orientation: the accelerometer, lightly
+// smoothed (it also picks up the hand's own movement)
+let gAcc = null;
+function onMotion(e) {
+  if (fused) return;
+  const a = e.accelerationIncludingGravity;
+  if (!a || a.x == null || a.y == null || a.z == null) return;
+  const g = toScreen(norm([a.x, a.y, a.z]));
+  gAcc = gAcc ? norm([gAcc[0] * 0.5 + g[0] * 0.5, gAcc[1] * 0.5 + g[1] * 0.5, gAcc[2] * 0.5 + g[2] * 0.5]) : g;
+  update(gAcc);
 }
 
 // iOS shows the motion prompt only from a finished tap (touchend / click),
-// and only when that tap's handler calls it directly.
+// and only when that tap's handler calls it directly; both requests are
+// made right here, inside the tap.
 let listening = false;
 let pending = false;
+function listen() {
+  if (listening) return;
+  listening = true;
+  window.addEventListener("deviceorientation", onOrientation);
+  window.addEventListener("devicemotion", onMotion);
+}
 function enableTilt() {
   if (listening || pending) return;
-  const D = window.DeviceMotionEvent;
-  if (!D) return;
-  if (typeof D.requestPermission !== "function") {        // Android, desktop
-    listening = true;
-    window.addEventListener("devicemotion", onMotion);
-    return;
-  }
+  const O = window.DeviceOrientationEvent, M = window.DeviceMotionEvent;
+  const asks = [];
+  if (O && typeof O.requestPermission === "function") asks.push(O.requestPermission());
+  if (M && typeof M.requestPermission === "function") asks.push(M.requestPermission());
+  if (!asks.length) { listen(); return; }               // Android, desktop
   pending = true;
-  D.requestPermission()                                   // called inside the tap
-    .then((answer) => {
-      if (answer === "granted") {
-        listening = true;
-        window.addEventListener("devicemotion", onMotion);
-      }
-    })
-    .catch(() => {})                                      // not a gesture: try on the next tap
+  Promise.allSettled(asks)
+    .then((rs) => { if (rs.some((r) => r.status === "fulfilled" && r.value === "granted")) listen(); })
     .finally(() => { pending = false; });
 }
 
 function restart() {
-  gLevel = gNow;              // however it's held now counts as level
+  uLevel = uNow;              // however it's held now counts as level
   send([0, 0, 0, 1]);
   if (vm) vm.number("restart").value = ++restartCount;
 }

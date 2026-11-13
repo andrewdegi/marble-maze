@@ -6,10 +6,12 @@ marble from the launch cup to the finish cup. Built with the
 controls all live in the Rive file (`mazeball.riv`), written in AnimaScript
 with WGSL shaders, and the model was built in Blender.
 
-**On a phone or iPad:** tap once to turn on tilt control, then tip the device
-the way you want the sphere to turn: the further you tip, the faster it
-turns, and holding it level stops it. Drag to look around. Double tap to restart (it also
-re-levels to however you're holding the device).
+**On a phone or iPad:** tap once to turn on tilt control. Tilting steers
+gravity, amplified 4x: a small tip swings "down" a long way, and about 45
+degrees in any direction turns it right over, so the marble can go anywhere
+without turning the device over. Drag to look around; double tap to restart
+(it also re-levels to however you're holding the device). Add `?gain=5` (or
+3, 6...) to the address to change the amplification.
 
 **On a computer:** drag the sphere to turn it, drag around it (or Shift-drag)
 to orbit the view, scroll to zoom, arrows/WASD to tilt, Q/E to twist,
