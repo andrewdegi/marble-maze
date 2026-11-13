@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#F3EADB">
+  <title>Marble Maze</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #F3EADB; overflow: hidden; overscroll-behavior: none; }
+    canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; display: block;
+      touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  </style>
+</head>
+<body>
+  <canvas id="maze"></canvas>
+  <script src="https://cdn.jsdelivr.net/npm/@rive-app/webgl2@2.50.0/rive.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
