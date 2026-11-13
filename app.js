@@ -24,7 +24,7 @@ let recenterCount = 0;
 let restartCount = 0;
 
 const r = new rive.Rive({
-  src: "mazeball.riv",
+  src: "mazeball.riv?v=3",
   canvas,
   autoplay: true,
   stateMachine: "State Machine 1",
