@@ -5,10 +5,10 @@
 //   double tap  restarts, and levels the tilt to however the device is held
 //   drag        turns the sphere (or, with tilt on, looks around it)
 //
+// Tilt works like a joystick: tip the device and the sphere keeps turning
+// that way, faster the further it's tipped; back to level and it stops.
 // Tilt comes from the accelerometer's gravity direction, not the
-// orientation angles: those have a blind spot (gimbal lock) exactly when a
-// tablet is held upright, where a slight turn makes them jump. Gravity has
-// no such spot, and a tilt toy only needs tilt.
+// orientation angles, which jump near upright (gimbal lock).
 //
 // The file's "Motion" view model takes the device's turn since it was last
 // levelled, as a quaternion in the screen's frame (x right, y up the
@@ -36,7 +36,7 @@ let recenterCount = 0;
 let restartCount = 0;
 
 const r = new rive.Rive({
-  src: "mazeball.riv?v=4",
+  src: "mazeball.riv?v=5",
   canvas,
   autoplay: true,
   stateMachine: "State Machine 1",
@@ -94,8 +94,8 @@ function onMotion(e) {
   if (!a || a.x == null || a.y == null || a.z == null) return;
   const g = toScreen(norm([a.x, a.y, a.z]));
   if (!isFinite(g[0] + g[1] + g[2])) return;
-  // a light low-pass keeps hand shake out of it
-  gNow = gNow ? norm([gNow[0] * 0.75 + g[0] * 0.25, gNow[1] * 0.75 + g[1] * 0.25, gNow[2] * 0.75 + g[2] * 0.25]) : g;
+  // a very light low-pass: takes the edge off hand shake without lag
+  gNow = gNow ? norm([gNow[0] * 0.55 + g[0] * 0.45, gNow[1] * 0.55 + g[1] * 0.45, gNow[2] * 0.55 + g[2] * 0.45]) : g;
   if (!gLevel) gLevel = gNow;
   if (!tiltOn && vm) {
     // the first real reading switches the sphere over to the device
