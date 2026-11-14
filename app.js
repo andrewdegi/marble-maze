@@ -5,31 +5,32 @@
 //   double tap  restarts, and levels the tilt to however the device is held
 //   drag        looks around the toy
 //
-// Tilt turns the toy, the way you'd hold the real one, and the marble rolls
-// under plain gravity, so what you see is what it feels. The shaping follows
-// the usual numbers for tilt controls:
+// Tilt steers gravity: the toy stays put (it only tips a little, so you can
+// see which way you're leaning) and "down" swings GAIN times as far as you
+// tip the device. The shaping follows the usual numbers for tilt controls:
 //
 //   neutral   however you're holding it just before you tap (people hold a
 //             tablet tipped ~20-45 deg toward them), else 25 deg toward you
 //   deadzone  3 deg, so a resting hand doesn't wobble it
-//   position  inside 30 deg of neutral the toy turns GAIN times your tilt
-//   spin      past 30 deg it keeps turning that way, faster up to 45 deg,
-//             so you can roll it right round without turning the device over;
-//             back inside 30 deg that extra turn eases off, so holding it
-//             level always means the toy upright
+//   position  gravity swings GAIN times your tilt, right over (180 deg) at
+//             3 + 180/GAIN deg, so every direction is in reach
+//   spin      tip further still and it keeps turning that way; back inside,
+//             that extra turn eases off
+//   show      the toy itself tips SHOW of the way, as a cue
 //
-// Tune from the address: ?gain=2.5&dead=3&edge=30&spin=200&ramp=15&curve=1&ret=1.2
+// Tune from the address: ?gain=3&dead=3&show=0.12&spin=200&ramp=15&curve=1&ret=1.2
 //
-// The file's "Motion" view model takes the toy's turn from level as a
-// quaternion in a tray frame (x right, y away from you, z up), plus counters
-// that re-level and restart.
+// The file's "Motion" view model takes the whole turn (qx..qw) and the part
+// to show by tipping the toy (tx..tw), both as quaternions in a tray frame
+// (x right, y away from you, z up), plus counters that re-level and restart.
 
 const params = new URLSearchParams(location.search);
 const num = (k, d, lo, hi) => { const v = parseFloat(params.get(k)); return isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d; };
 const DEG = Math.PI / 180;
-const GAIN = num("gain", 2.5, 0.5, 8);              // toy turn per degree of tilt
+const GAIN = num("gain", 3, 0.5, 8);                // gravity turn per degree of tilt
 const DEAD = num("dead", 3, 0, 15) * DEG;
-const EDGE = num("edge", 30, 5, 80) * DEG;          // position control inside this
+const EDGE = num("edge", DEAD / DEG + 180 / GAIN, 5, 90) * DEG;   // position control inside this
+const SHOW = num("show", 0.12, 0, 1);               // share of the turn the toy shows
 const SPIN = num("spin", 200, 0, 720) * DEG;        // rad/s at full push past the edge
 const RAMP = num("ramp", 15, 1, 60) * DEG;          // push past the edge for full spin
 const CURVE = num("curve", 1, 0.5, 3);              // >1: finer near neutral
@@ -61,7 +62,7 @@ let restartCount = 0;
 const recent = [];          // the last second of "up" readings, for levelling
 
 const r = new rive.Rive({
-  src: "mazeball.riv?v=9",
+  src: "mazeball.riv?v=10",
   canvas,
   autoplay: true,
   stateMachine: "State Machine 1",
@@ -107,12 +108,16 @@ function toScreen(v) {
   return [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]];
 }
 
-function send(q) {
+function send(q, t = [0, 0, 0, 1]) {
   if (!vm) return;
   vm.number("qx").value = q[0];
   vm.number("qy").value = q[1];
   vm.number("qz").value = q[2];
   vm.number("qw").value = q[3];
+  vm.number("tx").value = t[0];
+  vm.number("ty").value = t[1];
+  vm.number("tz").value = t[2];
+  vm.number("tw").value = t[3];
 }
 
 // q applied to v
@@ -177,7 +182,7 @@ function update(u) {
   const ax = -v[1], ay = v[0];                       // axis z x v: up swings from z toward v
   const s = Math.hypot(ax, ay);
   const tilt = Math.atan2(s, v[2]);
-  let turn = [0, 0, 0, 1];
+  let turn = [0, 0, 0, 1], shown = [0, 0, 0, 1];
   if (s > 1e-6 && tilt > DEAD) {
     const nx = ax / s, ny = ay / s;
     const span = EDGE - DEAD;
@@ -187,13 +192,14 @@ function update(u) {
     const push = Math.max(0, tilt - EDGE) / RAMP;
     if (push > 0) spun = mul(fromRotVec(nx * SPIN * Math.min(1, push) * dt, ny * SPIN * Math.min(1, push) * dt, 0), spun);
     turn = fromRotVec(nx * pos, ny * pos, 0);
+    shown = fromRotVec(nx * pos * SHOW, ny * pos * SHOW, 0);
   }
   if (tilt <= EDGE && RETURN > 0) spun = towardLevel(spun, 1 - Math.exp(-dt / RETURN));
   // sent as the turn that brings "up" back to level, which is the way the
-  // toy turns: tip the device's right edge down and the toy's right side
-  // dips with it
+  // toy's world turns: tip the device's right edge down and the marble
+  // rolls right
   const q = mul(turn, spun);
-  send([-q[0], -q[1], -q[2], q[3]]);
+  send([-q[0], -q[1], -q[2], q[3]], [-shown[0], -shown[1], -shown[2], shown[3]]);
 }
 
 // "up" in the device's frame from the W3C angles (Z-X'-Y''): it depends only

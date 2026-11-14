@@ -7,12 +7,11 @@ controls all live in the Rive file (`mazeball.riv`), written in AnimaScript
 with WGSL shaders, and the model was built in Blender.
 
 **On a phone or iPad:** tap once to turn on tilt control; however you're
-holding the device at that moment counts as level. Tilting turns the toy
-with it, 2.5x as far, and the marble rolls under ordinary gravity. Tip past
-30 degrees and the toy keeps rolling that way (faster up to 45), so it can go
-right round without turning the device over; come back inside 30 and it
-eases upright again. Drag to look around; double tap to restart and
-re-level. Tune from the address, e.g. `?gain=3&edge=25&spin=250&dead=3`.
+holding the device at that moment counts as level. Tilting steers gravity,
+3x as far as you tip, so about 60 degrees in any direction turns it right
+over; the toy itself only tips a little, as a cue. Drag to look around;
+double tap to restart and re-level. Tune from the address, e.g.
+`?gain=4&show=0.2&dead=3`.
 
 **On a computer:** drag the sphere to turn it, drag around it (or Shift-drag)
 to orbit the view, scroll to zoom, arrows/WASD to tilt, Q/E to twist,
