@@ -5,25 +5,36 @@
 //   double tap  restarts, and levels the tilt to however the device is held
 //   drag        looks around the toy
 //
-// Tilt steers gravity. The device's tilt away from level is multiplied by
-// GAIN, so a 10 degree tip swings down by 30 degrees and a 60 degree tip in
-// any direction turns gravity right over: full 360 degree control without
-// turning the device over. Try ?gain=4 or ?gain=2 in the address.
+// Tilt turns the toy, the way you'd hold the real one, and the marble rolls
+// under plain gravity, so what you see is what it feels. The shaping follows
+// the usual numbers for tilt controls:
 //
-// The tilt comes from the gyro-fused orientation (fast and steady), turned
-// into the direction of "up" so the angles' blind spot near upright never
-// matters; the raw accelerometer is the fallback.
+//   neutral   however you're holding it just before you tap (people hold a
+//             tablet tipped ~20-45 deg toward them), else 25 deg toward you
+//   deadzone  3 deg, so a resting hand doesn't wobble it
+//   position  inside 30 deg of neutral the toy turns GAIN times your tilt
+//   spin      past 30 deg it keeps turning that way, faster up to 45 deg,
+//             so you can roll it right round without turning the device over;
+//             back inside 30 deg that extra turn eases off, so holding it
+//             level always means the toy upright
 //
-// The file's "Motion" view model takes the (amplified) tilt since levelling
-// as a quaternion in a tray frame: the level pose laid flat, x to the
-// screen's right, y up the screen (away from you), z up. Plus counters that
-// re-level and restart.
+// Tune from the address: ?gain=2.5&dead=3&edge=30&spin=200&ramp=15&curve=1&ret=1.2
+//
+// The file's "Motion" view model takes the toy's turn from level as a
+// quaternion in a tray frame (x right, y away from you, z up), plus counters
+// that re-level and restart.
 
 const params = new URLSearchParams(location.search);
-const GAIN = Math.max(1, Math.min(8, parseFloat(params.get("gain")) || 3));
-const DEADZONE = (parseFloat(params.get("dead")) || 1) * Math.PI / 180;   // ignore the first degree of tilt
-// level is taken once the device has been held steady this long
-const SETTLE_MS = 250, SETTLE_DEG = 0.6;
+const num = (k, d, lo, hi) => { const v = parseFloat(params.get(k)); return isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d; };
+const DEG = Math.PI / 180;
+const GAIN = num("gain", 2.5, 0.5, 8);              // toy turn per degree of tilt
+const DEAD = num("dead", 3, 0, 15) * DEG;
+const EDGE = num("edge", 30, 5, 80) * DEG;          // position control inside this
+const SPIN = num("spin", 200, 0, 720) * DEG;        // rad/s at full push past the edge
+const RAMP = num("ramp", 15, 1, 60) * DEG;          // push past the edge for full spin
+const CURVE = num("curve", 1, 0.5, 3);              // >1: finer near neutral
+const RETURN = num("ret", 1.2, 0, 10);              // s for extra spin to ease off inside the edge (0: keep it)
+const NEUTRAL_BETA = num("neutral", 25, -30, 80);   // used when there's no pose to go by
 
 const canvas = document.getElementById("maze");
 
@@ -40,17 +51,17 @@ function sharpLayout() {
 }
 
 let vm = null;
-let uNow = null;            // "up" in the screen's frame
-let uLevel = null;          // "up" when last levelled (null: waiting to settle)
-let settleFrom = 0;         // when the device last started holding steady
-let uPrev = null;
+let uLevel = null;          // "up" in the screen's frame at level
+let spun = [0, 0, 0, 1];    // turn built up by pushing past the edge
+let lastT = 0;
 let tiltOn = false;
 let fused = false;          // orientation events arriving
 let recenterCount = 0;
 let restartCount = 0;
+const recent = [];          // the last second of "up" readings, for levelling
 
 const r = new rive.Rive({
-  src: "mazeball.riv?v=7",
+  src: "mazeball.riv?v=9",
   canvas,
   autoplay: true,
   stateMachine: "State Machine 1",
@@ -61,6 +72,7 @@ const r = new rive.Rive({
   onLoad: () => {
     fit();
     vm = r.viewModelInstance;
+    if (tiltOn) switchOn();
   },
   onLoadError: (e) => console.error("Couldn't load the maze", e),
 });
@@ -73,7 +85,7 @@ function fit() {
 let resizeTimer = 0;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { fit(); relevel(); }, 200);
+  resizeTimer = setTimeout(fit, 200);
 });
 
 // --- vectors and quaternions [x, y, z, w] -----------------------------------
@@ -103,54 +115,85 @@ function send(q) {
   vm.number("qw").value = q[3];
 }
 
-// the same turn, about the same axis, GAIN times as far (at most right
-// over), less a small deadzone so a device resting still doesn't wobble it
-function amplify(q) {
-  const w = Math.max(-1, Math.min(1, q[3]));
-  const ang = 2 * Math.acos(w);
-  const s = Math.sin(ang / 2);
-  if (s < 1e-6 || ang <= DEADZONE) return [0, 0, 0, 1];
-  const a2 = Math.min((ang - DEADZONE) * GAIN, Math.PI);
-  const k = Math.sin(a2 / 2) / s;
-  return [q[0] * k, q[1] * k, q[2] * k, Math.cos(a2 / 2)];
-}
-
 // q applied to v
 function rot(q, v) {
   const [x, y, z, w] = q;
   const tx = 2 * (y * v[2] - z * v[1]), ty = 2 * (z * v[0] - x * v[2]), tz = 2 * (x * v[1] - y * v[0]);
   return [v[0] + w * tx + (y * tz - z * ty), v[1] + w * ty + (z * tx - x * tz), v[2] + w * tz + (x * ty - y * tx)];
 }
+function mul(a, b) {
+  return [a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+          a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+          a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+          a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]];
+}
+function fromRotVec(x, y, z) {
+  const a = Math.hypot(x, y, z);
+  if (a < 1e-9) return [0, 0, 0, 1];
+  const s = Math.sin(a / 2) / a;
+  return [x * s, y * s, z * s, Math.cos(a / 2)];
+}
+// q eased a fraction k of the way back to no turn (by the short way round)
+function towardLevel(q, k) {
+  const sg = q[3] < 0 ? -1 : 1;
+  const ang = 2 * Math.acos(Math.min(1, q[3] * sg));
+  const s = Math.sin(ang / 2);
+  if (s < 1e-6) return [0, 0, 0, 1];
+  const a2 = ang * (1 - k), f = Math.sin(a2 / 2) / s * sg;
+  return [q[0] * f, q[1] * f, q[2] * f, Math.cos(a2 / 2)];
+}
+function upFrom(beta, gamma) {
+  const b = beta * DEG, g = gamma * DEG;
+  return [-Math.cos(b) * Math.sin(g), Math.sin(b), Math.cos(b) * Math.cos(g)];
+}
 
-const angleBetween = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])));
+// Level from how the device was held over the moment before t (a tap): the
+// hand holds still to tap. With nothing to go by, a typical hold.
+function poseBefore(t) {
+  const v = recent.filter((r) => r.t <= t && r.t > t - 450);
+  if (v.length < 5) return null;
+  const m = [0, 0, 0];
+  for (const r of v) { m[0] += r.u[0]; m[1] += r.u[1]; m[2] += r.u[2]; }
+  return norm(m);
+}
+function level(t) {
+  uLevel = poseBefore(t) || toScreen(upFrom(NEUTRAL_BETA, 0));
+  spun = [0, 0, 0, 1];
+  if (vm) vm.number("recenter").value = ++recenterCount;
+  send([0, 0, 0, 1]);
+}
 
 function update(u) {
   if (!isFinite(u[0] + u[1] + u[2])) return;
-  uNow = u;
-  // Level only from a pose held steady: the first readings after a tap
-  // catch the device mid-movement, and a moving reading as "level" leaves
-  // gravity skewed for the whole game.
   const t = performance.now();
-  if (!uPrev || angleBetween(u, uPrev) * 180 / Math.PI > SETTLE_DEG) settleFrom = t;
-  uPrev = u;
-  if (!uLevel) {
-    if (t - settleFrom < SETTLE_MS) { if (tiltOn) send([0, 0, 0, 1]); return; }
-    uLevel = u;
+  recent.push({ t, u });
+  while (recent.length && recent[0].t < t - 1000) recent.shift();
+  const dt = Math.min(0.05, Math.max(0, (t - lastT) / 1000));
+  lastT = t;
+  if (!tiltOn || !uLevel) return;
+  // tilt from neutral, as a turn about a level axis in the tray frame
+  const L = fromTo(uLevel, [0, 0, 1]);
+  const v = rot(L, u);
+  const ax = -v[1], ay = v[0];                       // axis z x v: up swings from z toward v
+  const s = Math.hypot(ax, ay);
+  const tilt = Math.atan2(s, v[2]);
+  let turn = [0, 0, 0, 1];
+  if (s > 1e-6 && tilt > DEAD) {
+    const nx = ax / s, ny = ay / s;
+    const span = EDGE - DEAD;
+    const inside = Math.min(tilt - DEAD, span) / span;  // 0..1 across the position zone
+    const pos = Math.pow(inside, CURVE) * span * GAIN;
+    // past the edge: keep turning that way, faster the further you push
+    const push = Math.max(0, tilt - EDGE) / RAMP;
+    if (push > 0) spun = mul(fromRotVec(nx * SPIN * Math.min(1, push) * dt, ny * SPIN * Math.min(1, push) * dt, 0), spun);
+    turn = fromRotVec(nx * pos, ny * pos, 0);
   }
-  if (!tiltOn && vm) {
-    // the first real reading switches the toy over to the device
-    tiltOn = true;
-    vm.number("recenter").value = ++recenterCount;
-    vm.boolean("motionActive").value = true;
-  }
-  // the device's tilt since levelling: "up", seen from the screen, has
-  // swung from where it was to where it is now. Turn the level pose flat
-  // first (the same turn for both), so the tilt is about a level axis and
-  // means the same in every direction.
-  if (tiltOn) {
-    const L = fromTo(uLevel, [0, 0, 1]);
-    send(amplify(fromTo(rot(L, u), [0, 0, 1])));
-  }
+  if (tilt <= EDGE && RETURN > 0) spun = towardLevel(spun, 1 - Math.exp(-dt / RETURN));
+  // sent as the turn that brings "up" back to level, which is the way the
+  // toy turns: tip the device's right edge down and the toy's right side
+  // dips with it
+  const q = mul(turn, spun);
+  send([-q[0], -q[1], -q[2], q[3]]);
 }
 
 // "up" in the device's frame from the W3C angles (Z-X'-Y''): it depends only
@@ -158,8 +201,7 @@ function update(u) {
 function onOrientation(e) {
   if (e.beta == null || e.gamma == null) return;
   fused = true;
-  const d = Math.PI / 180, b = e.beta * d, g = e.gamma * d;
-  update(toScreen([-Math.cos(b) * Math.sin(g), Math.sin(b), Math.cos(b) * Math.cos(g)]));
+  update(toScreen(upFrom(e.beta, e.gamma)));
 }
 
 // fallback when there's no fused orientation: the accelerometer, lightly
@@ -174,12 +216,11 @@ function onMotion(e) {
   update(gAcc);
 }
 
-// back from another app or tab: level again from the pose it's held in now
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") relevel(); });
-
 // iOS shows the motion prompt only from a finished tap (touchend / click),
 // and only when that tap's handler calls it directly; both requests are
-// made right here, inside the tap.
+// made right here, inside the tap. If access was already given, readings
+// flow from the start, and the pose before the first tap is there to level
+// from.
 let listening = false;
 let pending = false;
 function listen() {
@@ -188,40 +229,42 @@ function listen() {
   window.addEventListener("deviceorientation", onOrientation);
   window.addEventListener("devicemotion", onMotion);
 }
-function enableTilt() {
-  if (listening || pending) return;
+listen();
+function askForMotion() {
+  if (pending || fused) return;
   const O = window.DeviceOrientationEvent, M = window.DeviceMotionEvent;
   const asks = [];
   if (O && typeof O.requestPermission === "function") asks.push(O.requestPermission());
   if (M && typeof M.requestPermission === "function") asks.push(M.requestPermission());
-  if (!asks.length) { listen(); return; }               // Android, desktop
+  if (!asks.length) return;
   pending = true;
-  Promise.allSettled(asks)
-    .then((rs) => { if (rs.some((r) => r.status === "fulfilled" && r.value === "granted")) listen(); })
-    .finally(() => { pending = false; });
+  Promise.allSettled(asks).finally(() => { pending = false; });
 }
 
-function relevel() {
-  uLevel = null;              // the next steady pose counts as level
-  send([0, 0, 0, 1]);
+function switchOn() {
+  if (!vm) return;
+  vm.number("recenter").value = ++recenterCount;
+  vm.boolean("motionActive").value = true;
 }
 
-function restart() {
-  relevel();
-  send([0, 0, 0, 1]);
-  if (vm) vm.number("restart").value = ++restartCount;
-}
-
-// first tap: tilt on. double tap: restart.
-let lastTap = 0, lastX = 0, lastY = 0, downX = 0, downY = 0;
-canvas.addEventListener("pointerdown", (e) => { downX = e.clientX; downY = e.clientY; });
-canvas.addEventListener("touchend", enableTilt, { passive: true });
-canvas.addEventListener("click", enableTilt);
+// first tap: tilt on, level as held. double tap: restart and level again.
+let lastTap = 0, lastX = 0, lastY = 0, downX = 0, downY = 0, downT = 0, prevDownT = 0;
+canvas.addEventListener("pointerdown", (e) => { downX = e.clientX; downY = e.clientY; prevDownT = downT; downT = performance.now(); });
+canvas.addEventListener("touchend", askForMotion, { passive: true });
+canvas.addEventListener("click", askForMotion);
 canvas.addEventListener("pointerup", (e) => {
   if (Math.hypot(e.clientX - downX, e.clientY - downY) > 12) return;   // that was a drag
   const now = performance.now();
+  if (!tiltOn) {
+    tiltOn = true;
+    level(downT);
+    switchOn();
+    lastTap = 0;
+    return;
+  }
   if (now - lastTap < 320 && Math.hypot(e.clientX - lastX, e.clientY - lastY) < 40) {
-    restart();
+    level(prevDownT);
+    if (vm) vm.number("restart").value = ++restartCount;
     lastTap = 0;
     return;
   }
