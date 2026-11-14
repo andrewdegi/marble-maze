@@ -6,6 +6,10 @@ marble from the launch cup to the finish cup. Built with the
 controls all live in the Rive file (`mazeball.riv`), written in AnimaScript
 with WGSL shaders, and the model was built in Blender.
 
+**At the finish** the whole toy shrinks, twirls and silvers over into a
+marble, a fresh copy of the puzzle grows up around it, and it drops into the
+start: the puzzle never ends.
+
 **On a phone or iPad:** tap once to turn on tilt control; however you're
 holding the device at that moment counts as level. Tilting steers gravity,
 3x as far as you tip, so about 60 degrees in any direction turns it right
