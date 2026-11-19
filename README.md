@@ -4,7 +4,9 @@ A clear sphere full of interlocking labyrinths and track: turn it to roll the
 marble from the launch cup to the finish cup. Built with the
 [Rive CLI](https://rive.app/docs/cli/overview): the 3D rendering, physics and
 controls all live in the Rive file (`mazeball.riv`), written in AnimaScript
-with WGSL shaders, and the model was built in Blender.
+with WGSL shaders, and the model was built in Blender. The marble runs on
+[Box3D](https://github.com/erincatto/box3d) through Luigi Rosso's AnimaScript
+port, [box3d-as](https://github.com/luigi-rosso/box3d-as) (MIT).
 
 **At the finish** the whole toy shrinks, twirls and silvers over into a
 marble, a fresh copy of the puzzle grows up around it, and it drops into the
