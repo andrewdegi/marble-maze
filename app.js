@@ -62,7 +62,7 @@ let restartCount = 0;
 const recent = [];          // the last second of "up" readings, for levelling
 
 const r = new rive.Rive({
-  src: "mazeball.riv?v=13",
+  src: "mazeball.riv?v=14",
   canvas,
   autoplay: true,
   stateMachine: "State Machine 1",

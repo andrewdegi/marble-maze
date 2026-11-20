@@ -6,7 +6,9 @@ marble from the launch cup to the finish cup. Built with the
 controls all live in the Rive file (`mazeball.riv`), written in AnimaScript
 with WGSL shaders, and the model was built in Blender. The marble runs on
 [Box3D](https://github.com/erincatto/box3d) through Luigi Rosso's AnimaScript
-port, [box3d-as](https://github.com/luigi-rosso/box3d-as) (MIT).
+port, [box3d-as](https://github.com/luigi-rosso/box3d-as) (MIT). Its
+collision tree for the maze's ~240k triangles is built ahead of time and
+shipped in the file, so the toy appears without a pause.
 
 **At the finish** the whole toy shrinks, twirls and silvers over into a
 marble, a fresh copy of the puzzle grows up around it, and it drops into the
@@ -23,5 +25,5 @@ double tap to restart and re-level. Tune from the address, e.g.
 to orbit the view, scroll to zoom, arrows/WASD to tilt, Q/E to twist,
 R or double-click to restart.
 
-The page (`index.html`, `app.js`) loads the file with `@rive-app/webgl2` and
+The page (`index.html`, `app.js`) loads the file with `@rive-app/webgl2` (2.51.0; 2.52.0 draws nothing) and
 writes the device's rotation into the file's `Motion` view model.
